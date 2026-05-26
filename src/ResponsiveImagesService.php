@@ -27,6 +27,7 @@ class ResponsiveImagesService
             return null;
         }
 
+        /** @phpstan-ignore-next-line */
         $originalImage = $this->imageManager->read(
             Storage::disk($disk)->get($path)
         );

@@ -26,7 +26,10 @@ class ResponsiveImage
 
         $imgAttrsString = $this->buildAttributesString($imgAttributes);
 
-        return view('responsive-images::picture', [
+        /** @var view-string $viewName */
+        $viewName = 'responsive-images::picture';
+
+        return view($viewName, [
             'format' => $this->format,
             'srcset' => $this->srcset,
             'sizes' => $this->sizes,

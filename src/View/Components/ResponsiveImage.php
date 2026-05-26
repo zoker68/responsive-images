@@ -28,6 +28,9 @@ class ResponsiveImage extends Component
 
     public function render()
     {
-        return view('responsive-images::components.responsive-image');
+        /** @var view-string $viewName */
+        $viewName = 'responsive-images::components.responsive-image';
+
+        return view($viewName);
     }
 }
