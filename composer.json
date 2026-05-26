@@ -1,0 +1,42 @@
+{
+    "name": "zoker/responsive-images",
+    "description": "Responsive images with webp conversion for Laravel",
+    "type": "library",
+    "require": {
+        "php": "^8.4",
+        "spatie/laravel-package-tools": "^1.93",
+        "intervention/image": "^4.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^v3.9"
+    },
+    "autoload": {
+        "psr-4": {
+            "Zoker\\ResponsiveImages\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Maksim Martynov",
+            "email": "zokermm@gmail.com",
+            "homepage": "https://github.com/zoker68"
+        }
+    ],
+    "minimum-stability": "dev",
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Zoker\\ResponsiveImages\\ResponsiveImagesServiceProvider"
+            ],
+            "aliases": {
+                "ResponsiveImages": "Zoker\\ResponsiveImages\\Facades\\ResponsiveImages"
+            }
+        },
+        "branch-alias": {
+            "dev-master": "1-dev"
+        }
+    },
+    "scripts": {
+        "analyze": "php -d memory_limit=1G vendor/bin/phpstan analyse"
+    }
+}
