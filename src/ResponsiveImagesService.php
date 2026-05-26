@@ -8,11 +8,11 @@ use Intervention\Image\ImageManager;
 
 class ResponsiveImagesService
 {
-    protected ImageManager $imageManager;
+    protected ImageManager $manager;
 
     public function __construct()
     {
-        $this->imageManager = new ImageManager(new Driver);
+        $this->manager = new ImageManager(new Driver);
     }
 
     public function make(
@@ -27,10 +27,20 @@ class ResponsiveImagesService
             return null;
         }
 
-        /** @phpstan-ignore-next-line */
-        $originalImage = $this->imageManager->read(
-            Storage::disk($disk)->get($path)
-        );
+        // v4 uses read(), v3 uses make()
+        // @phpstan-ignore-next-line (supports both v3 and v4)
+        if (method_exists($this->manager, 'read')) {
+            // v4: read from binary data
+            $originalImage = $this->manager->read(
+                Storage::disk($disk)->get($path)
+            );
+        } else {
+            // v3: make from file path
+            // @phpstan-ignore-next-line (make() exists in v3)
+            $originalImage = $this->manager->make(
+                Storage::disk($disk)->path($path)
+            );
+        }
 
         $originalWidth = $originalImage->width();
         $originalHeight = $originalImage->height();
@@ -81,13 +91,28 @@ class ResponsiveImagesService
             if (! Storage::disk($outputDisk)->exists($outputFilePath)) {
                 $resizedImage = clone $originalImage;
 
-                if ($height && $width) {
-                    $resizedImage->cover($size, $resizedHeight);
+                // v3 vs v4 methods
+                // @phpstan-ignore-next-line (supports both v3 and v4)
+                if (method_exists($resizedImage, 'cover')) {
+                    // v4
+                    if ($height && $width) {
+                        $resizedImage->cover($size, $resizedHeight);
+                    } else {
+                        $resizedImage->scale(width: $size);
+                    }
+                    $encoded = $resizedImage->toWebp($quality);
                 } else {
-                    $resizedImage->scale(width: $size);
+                    // v3
+                    // @phpstan-ignore-next-line (v3 methods)
+                    if ($height && $width) {
+                        $resizedImage->fit($size, $resizedHeight);
+                    } else {
+                        $resizedImage->resize($size, null, function ($constraint) {
+                            $constraint->aspectRatio();
+                        });
+                    }
+                    $encoded = $resizedImage->encode('webp', $quality);
                 }
-
-                $encoded = $resizedImage->toWebp($quality);
 
                 Storage::disk($outputDisk)->put(
                     $outputFilePath,
