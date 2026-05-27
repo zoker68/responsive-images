@@ -31,5 +31,6 @@ class GenerateResponsiveImages implements ShouldBeUniqueUntilProcessing, ShouldQ
     public function handle(ResponsiveImagesService $service): void
     {
         $service->generate($this->path, $this->width, $this->height, $this->disk);
+        $service->forgetCache($this->path, $this->width, $this->height, $this->disk);
     }
 }

@@ -2,7 +2,9 @@
 
 namespace Zoker\ResponsiveImages;
 
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
@@ -32,7 +34,27 @@ class ResponsiveImagesService
         }
 
         $disk = $disk ?? config('responsive-images.disk');
+        [$staleSeconds, $expireSeconds] = config('responsive-images.cache_ttl', [300, 86400]);
+        $cacheKey = $this->cacheKey($path, $width, $height, $disk);
 
+        return $this->cache()->flexible(
+            $cacheKey,
+            [$staleSeconds, $expireSeconds],
+            fn () => $this->resolve($path, $width, $height, $disk)
+        );
+    }
+
+    /**
+     * Forget the cached make() result for given parameters.
+     */
+    public function forgetCache(string $path, ?int $width, ?int $height, ?string $disk): void
+    {
+        $disk = $disk ?? config('responsive-images.disk');
+        $this->cache()->forget($this->cacheKey($path, $width, $height, $disk));
+    }
+
+    protected function resolve(string $path, ?int $width, ?int $height, string $disk): ?ResponsiveImage
+    {
         if (! Storage::disk($disk)->exists($path)) {
             return null;
         }
@@ -80,6 +102,18 @@ class ResponsiveImagesService
             height: $height ?? 0,
             format: $ctx['format']
         );
+    }
+
+    protected function cache(): Repository
+    {
+        $store = config('responsive-images.cache_store');
+
+        return $store ? Cache::store($store) : Cache::store();
+    }
+
+    protected function cacheKey(string $path, ?int $width, ?int $height, string $disk): string
+    {
+        return 'responsive-images:' . md5(implode('|', [$disk, $path, $width ?? '', $height ?? '']));
     }
 
     /**
@@ -139,6 +173,8 @@ class ResponsiveImagesService
         if (Storage::disk($outputDisk)->exists($target)) {
             Storage::disk($outputDisk)->deleteDirectory($target);
         }
+
+        $this->cache()->clear();
     }
 
     /**

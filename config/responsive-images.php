@@ -81,4 +81,27 @@ return [
     |
     */
     'queue' => env('RESPONSIVE_IMAGES_QUEUE', null),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cache Store
+    |--------------------------------------------------------------------------
+    |
+    | Cache store used for the make() result. Should be a persistent backend
+    | (redis, memcached, database, file). Set to null to use the default store.
+    |
+    */
+    'cache_store' => env('RESPONSIVE_IMAGES_CACHE_STORE', env('CACHE_DRIVER', 'file')),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cache TTL
+    |--------------------------------------------------------------------------
+    |
+    | Stale-while-revalidate TTLs for make() result, in seconds.
+    | [stale, expire]: up to "stale" — fresh; between "stale" and "expire" —
+    | served stale and refreshed in background; after "expire" — full refresh.
+    |
+    */
+    'cache_ttl' => [600, 86400],
 ];
