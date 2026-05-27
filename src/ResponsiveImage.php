@@ -50,12 +50,18 @@ class ResponsiveImage
     {
         $imgAttributes = array_merge([
             'src' => $this->src,
-            'width' => $this->width,
-            'height' => $this->height,
             'loading' => $loading,
             'decoding' => 'async',
             'alt' => $alt,
         ], $attributes);
+
+        if ($this->width > 0) {
+            $imgAttributes['width'] = $this->width;
+        }
+
+        if ($this->height > 0) {
+            $imgAttributes['height'] = $this->height;
+        }
 
         $imgAttrsString = $this->buildAttributesString($imgAttributes);
 

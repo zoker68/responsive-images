@@ -2,9 +2,11 @@
 
 namespace Zoker\ResponsiveImages;
 
+use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Storage;
 use Intervention\Image\Drivers\Gd\Driver;
 use Intervention\Image\ImageManager;
+use Zoker\ResponsiveImages\Jobs\GenerateResponsiveImages;
 
 class ResponsiveImagesService
 {
@@ -15,6 +17,10 @@ class ResponsiveImagesService
         $this->manager = new ImageManager(new Driver);
     }
 
+    /**
+     * Build a ResponsiveImage from cached files. If anything is missing,
+     * dispatch a job to generate it and return a fallback (webp original or source).
+     */
     public function make(
         ?string $path,
         ?int $width = null,
@@ -31,100 +37,87 @@ class ResponsiveImagesService
             return null;
         }
 
-        // v4 uses read(), v3 uses make()
-        // @phpstan-ignore-next-line (supports both v3 and v4)
-        if (method_exists($this->manager, 'read')) {
-            // v4: read from binary data
-            $originalImage = $this->manager->read(
-                Storage::disk($disk)->get($path)
-            );
-        } else {
-            // v3: make from file path
-            // @phpstan-ignore-next-line (make() exists in v3)
-            $originalImage = $this->manager->make(
-                Storage::disk($disk)->path($path)
-            );
-        }
-
-        $originalWidth = $originalImage->width();
-        $originalHeight = $originalImage->height();
-
-        if ($width === null) {
-            $width = $originalWidth;
-        }
-
-        if ($height === null && $width !== $originalWidth) {
-            $aspectRatio = $originalHeight / $originalWidth;
-            $height = (int) round($width * $aspectRatio);
-        } elseif ($height === null) {
-            $height = $originalHeight;
-        }
-
-        $sizes = $this->calculateSizes($width);
-        $outputDisk = config('responsive-images.output_disk');
-        $outputPath = config('responsive-images.output_path');
-        $quality = config('responsive-images.quality');
-        $format = config('responsive-images.format');
-
-        $lastModified = Storage::disk($disk)->lastModified($path);
-
-        $pathInfo = pathinfo($path);
-        $originalFilename = $pathInfo['filename'];
-        $imageDirectory = $this->getImageDirectory($path);
-        $fullOutputPath = "{$outputPath}/{$imageDirectory}";
+        $ctx = $this->buildContext($path, $disk);
+        $sizes = $width !== null
+            ? $this->calculateSizes($width)
+            : config('responsive-images.breakpoints', []);
 
         $generatedImages = [];
-        $aspectRatio = $originalHeight / $originalWidth;
+        $allCached = true;
 
         foreach ($sizes as $size) {
-            $resizedHeight = $height
-                ? (int) round($size * ($height / $width))
-                : (int) round($size * $aspectRatio);
+            $url = $this->getCachedSizeUrl($ctx, $size, $width, $height);
 
-            $imageHash = md5(implode('|', [
-                $lastModified,
-                $size,
-                $resizedHeight,
-                $quality,
-                $format,
-            ]));
-
-            $outputFileName = "{$originalFilename}-{$size}-{$imageHash}.{$format}";
-            $outputFilePath = "{$fullOutputPath}/{$outputFileName}";
-
-            if (! Storage::disk($outputDisk)->exists($outputFilePath)) {
-                $resizedImage = clone $originalImage;
-
-                // v3 vs v4 methods
-                // @phpstan-ignore-next-line (supports both v3 and v4)
-                if (method_exists($resizedImage, 'cover')) {
-                    // v4
-                    if ($height && $width) {
-                        $resizedImage->cover($size, $resizedHeight);
-                    } else {
-                        $resizedImage->scale(width: $size);
-                    }
-                    $encoded = $resizedImage->toWebp($quality);
-                } else {
-                    // v3
-                    // @phpstan-ignore-next-line (v3 methods)
-                    if ($height && $width) {
-                        $resizedImage->fit($size, $resizedHeight);
-                    } else {
-                        $resizedImage->resize($size, null, function ($constraint) {
-                            $constraint->aspectRatio();
-                        });
-                    }
-                    $encoded = $resizedImage->encode('webp', $quality);
-                }
-
-                Storage::disk($outputDisk)->put(
-                    $outputFilePath,
-                    (string) $encoded
-                );
+            if ($url !== null) {
+                $generatedImages[$size] = $url;
+            } else {
+                $allCached = false;
             }
+        }
 
-            $generatedImages[$size] = Storage::disk($outputDisk)->url($outputFilePath);
+        if (! $allCached) {
+            $this->dispatchJob($path, $width, $height, $disk);
+        }
+
+        if (empty($generatedImages)) {
+            $fallback = $this->getFallback($ctx);
+
+            return new ResponsiveImage(
+                src: $fallback['url'],
+                generatedImages: [($width ?? 0) => $fallback['url']],
+                sizes: '100vw',
+                width: $width ?? 0,
+                height: $height ?? 0,
+                format: $fallback['format']
+            );
+        }
+
+        return new ResponsiveImage(
+            src: end($generatedImages),
+            generatedImages: $generatedImages,
+            sizes: '100vw',
+            width: $width ?? 0,
+            height: $height ?? 0,
+            format: $ctx['format']
+        );
+    }
+
+    /**
+     * Generate webp original and all responsive sizes. Used by the queue job.
+     */
+    public function generate(
+        ?string $path,
+        ?int $width = null,
+        ?int $height = null,
+        ?string $disk = null
+    ): ?ResponsiveImage {
+        if ($path === null) {
+            return null;
+        }
+
+        $disk = $disk ?? config('responsive-images.disk');
+
+        if (! Storage::disk($disk)->exists($path)) {
+            return null;
+        }
+
+        $ctx = $this->buildContext($path, $disk);
+        $original = $this->readOriginal($disk, $path);
+
+        $explicitHeight = $height;
+        $width = $width ?? $original->width();
+        $height = $height ?? (int) round($width * ($original->height() / $original->width()));
+
+        $this->ensureOriginalWebp($ctx, $original);
+
+        $sizes = $this->calculateSizes($width);
+        $generatedImages = [];
+
+        foreach ($sizes as $size) {
+            $resizedHeight = (int) round($size * ($height / $width));
+            $generatedImages[$size] = $this->ensureSizeFile(
+                $ctx, $original, $size, $width, $explicitHeight !== null ? $height : null, $resizedHeight
+            );
         }
 
         return new ResponsiveImage(
@@ -133,15 +126,195 @@ class ResponsiveImagesService
             sizes: '100vw',
             width: $width,
             height: $height,
-            format: $format
+            format: $ctx['format']
         );
+    }
+
+    public function clear(?string $path = null): void
+    {
+        $outputDisk = config('responsive-images.output_disk');
+        $outputPath = config('responsive-images.output_path');
+        $target = $path ? "{$outputPath}/{$this->getImageDirectory($path)}" : $outputPath;
+
+        if (Storage::disk($outputDisk)->exists($target)) {
+            Storage::disk($outputDisk)->deleteDirectory($target);
+        }
+    }
+
+    /**
+     * Build common context: paths, config and metadata used by both make() and generate().
+     *
+     * @return array{disk:string,path:string,outputDisk:string,fullOutputPath:string,filename:string,lastModified:int,quality:int,format:string}
+     */
+    protected function buildContext(string $path, string $disk): array
+    {
+        $outputPath = config('responsive-images.output_path');
+        $filename = pathinfo($path, PATHINFO_FILENAME);
+
+        return [
+            'disk' => $disk,
+            'path' => $path,
+            'outputDisk' => config('responsive-images.output_disk'),
+            'fullOutputPath' => "{$outputPath}/{$this->getImageDirectory($path)}",
+            'filename' => $filename,
+            'lastModified' => Storage::disk($disk)->lastModified($path),
+            'quality' => config('responsive-images.quality'),
+            'format' => config('responsive-images.format'),
+        ];
+    }
+
+    /**
+     * Return URL of cached resized file or null if it doesn't exist.
+     */
+    protected function getCachedSizeUrl(array $ctx, int $size, ?int $width, ?int $height): ?string
+    {
+        $resizedHeight = ($width !== null && $height !== null)
+            ? (int) round($size * ($height / $width))
+            : null;
+
+        $filePath = $this->buildSizePath($ctx, $size, $resizedHeight);
+        $output = $this->outputDisk($ctx);
+
+        return $output->exists($filePath) ? $output->url($filePath) : null;
+    }
+
+    /**
+     * Get fallback URL: webp original if cached, otherwise source file.
+     *
+     * @return array{url:string,format:string}
+     */
+    protected function getFallback(array $ctx): array
+    {
+        $webpPath = $this->buildOriginalWebpPath($ctx);
+        $output = $this->outputDisk($ctx);
+
+        if ($output->exists($webpPath)) {
+            return ['url' => $output->url($webpPath), 'format' => $ctx['format']];
+        }
+
+        return [
+            'url' => Storage::disk($ctx['disk'])->url($ctx['path']),
+            'format' => pathinfo($ctx['path'], PATHINFO_EXTENSION),
+        ];
+    }
+
+    /**
+     * Ensure webp version of the original image exists in cache.
+     */
+    protected function ensureOriginalWebp(array $ctx, $original): void
+    {
+        $filePath = $this->buildOriginalWebpPath($ctx);
+        $output = $this->outputDisk($ctx);
+
+        if ($output->exists($filePath)) {
+            return;
+        }
+
+        $output->put($filePath, (string) $this->encodeWebp(clone $original, $ctx['quality']));
+    }
+
+    /**
+     * Ensure resized file exists; create it if missing. Returns its public URL.
+     */
+    protected function ensureSizeFile(array $ctx, $original, int $size, int $width, ?int $height, int $resizedHeight): string
+    {
+        $filePath = $this->buildSizePath($ctx, $size, $height !== null ? $resizedHeight : null);
+        $output = $this->outputDisk($ctx);
+
+        if (! $output->exists($filePath)) {
+            $resized = $this->resize(clone $original, $size, $height !== null ? $resizedHeight : null);
+            $output->put($filePath, (string) $this->encodeWebp($resized, $ctx['quality']));
+        }
+
+        return $output->url($filePath);
+    }
+
+    protected function buildOriginalWebpPath(array $ctx): string
+    {
+        $hash = md5(implode('|', [$ctx['lastModified'], $ctx['quality'], $ctx['format']]));
+
+        return "{$ctx['fullOutputPath']}/{$ctx['filename']}-original-{$hash}.{$ctx['format']}";
+    }
+
+    protected function buildSizePath(array $ctx, int $size, ?int $resizedHeight): string
+    {
+        $hashParts = [$ctx['lastModified'], $size, $ctx['quality'], $ctx['format']];
+
+        if ($resizedHeight !== null) {
+            $hashParts[] = $resizedHeight;
+        }
+
+        $hash = md5(implode('|', $hashParts));
+
+        return "{$ctx['fullOutputPath']}/{$ctx['filename']}-{$size}-{$hash}.{$ctx['format']}";
+    }
+
+    protected function readOriginal(string $disk, string $path)
+    {
+        // v4 uses read(), v3 uses make()
+        // @phpstan-ignore-next-line (supports both v3 and v4)
+        if (method_exists($this->manager, 'read')) {
+            return $this->manager->read(Storage::disk($disk)->get($path));
+        }
+
+        // @phpstan-ignore-next-line (make() exists in v3)
+        return $this->manager->make(Storage::disk($disk)->path($path));
+    }
+
+    protected function resize($image, int $width, ?int $height)
+    {
+        // @phpstan-ignore-next-line (supports both v3 and v4)
+        if (method_exists($image, 'cover')) {
+            // v4
+            if ($height !== null) {
+                $image->cover($width, $height);
+            } else {
+                $image->scale(width: $width);
+            }
+        } else {
+            // v3
+            if ($height !== null) {
+                // @phpstan-ignore-next-line (v3 method)
+                $image->fit($width, $height);
+            } else {
+                // @phpstan-ignore-next-line (v3 method)
+                $image->resize($width, null, fn ($c) => $c->aspectRatio());
+            }
+        }
+
+        return $image;
+    }
+
+    protected function encodeWebp($image, int $quality)
+    {
+        // @phpstan-ignore-next-line (supports both v3 and v4)
+        return method_exists($image, 'toWebp')
+            ? $image->toWebp($quality)
+            : $image->encode('webp', $quality); // @phpstan-ignore-line
+    }
+
+    protected function outputDisk(array $ctx): Filesystem
+    {
+        return Storage::disk($ctx['outputDisk']);
+    }
+
+    protected function dispatchJob(string $path, ?int $width, ?int $height, ?string $disk): void
+    {
+        $job = new GenerateResponsiveImages($path, $width, $height, $disk);
+
+        if ($queue = config('responsive-images.queue')) {
+            $job->onQueue($queue);
+        }
+
+        dispatch($job);
     }
 
     protected function calculateSizes(int $targetWidth): array
     {
-        $breakpoints = config('responsive-images.breakpoints', []);
-
-        $sizes = array_filter($breakpoints, fn ($bp) => $bp <= $targetWidth);
+        $sizes = array_filter(
+            config('responsive-images.breakpoints', []),
+            fn ($bp) => $bp <= $targetWidth
+        );
 
         if (! in_array($targetWidth, $sizes)) {
             $sizes[] = $targetWidth;
@@ -154,29 +327,9 @@ class ResponsiveImagesService
 
     protected function getImageDirectory(string $path): string
     {
-        $pathInfo = pathinfo($path);
-        $directory = $pathInfo['dirname'] !== '.' ? $pathInfo['dirname'] . '/' : '';
-        $filename = $pathInfo['filename'];
+        $info = pathinfo($path);
+        $directory = $info['dirname'] !== '.' ? $info['dirname'] . '/' : '';
 
-        return $directory . $filename;
-    }
-
-    public function clear(?string $path = null): void
-    {
-        $outputDisk = config('responsive-images.output_disk');
-        $outputPath = config('responsive-images.output_path');
-
-        if ($path) {
-            $imageDirectory = $this->getImageDirectory($path);
-            $fullPath = "{$outputPath}/{$imageDirectory}";
-
-            if (Storage::disk($outputDisk)->exists($fullPath)) {
-                Storage::disk($outputDisk)->deleteDirectory($fullPath);
-            }
-        } else {
-            if (Storage::disk($outputDisk)->exists($outputPath)) {
-                Storage::disk($outputDisk)->deleteDirectory($outputPath);
-            }
-        }
+        return $directory . $info['filename'];
     }
 }

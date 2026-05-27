@@ -6,8 +6,8 @@
     >
     <img
         src="{{ $image->src }}"
-        width="{{ $image->width }}"
-        height="{{ $image->height }}"
+        @if ($image->width > 0) width="{{ $image->width }}" @endif
+        @if ($image->height > 0) height="{{ $image->height }}" @endif
         loading="{{ $loading }}"
         decoding="async"
         alt="{{ $alt }}"

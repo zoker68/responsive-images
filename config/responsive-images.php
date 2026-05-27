@@ -70,4 +70,15 @@ return [
     |
     */
     'format' => 'webp', // env('RESPONSIVE_IMAGES_FORMAT', 'webp'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Queue
+    |--------------------------------------------------------------------------
+    |
+    | Queue name for background image generation jobs. Set to null to use the
+    | default queue. Set to false to disable async generation entirely (sync).
+    |
+    */
+    'queue' => env('RESPONSIVE_IMAGES_QUEUE', null),
 ];
