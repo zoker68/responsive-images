@@ -97,6 +97,43 @@ echo $image->toHtml('Hero image', 'eager');
 )
 ```
 
+### Working with the `ResponsiveImage` Object
+
+`ResponsiveImages::make()` returns a `ResponsiveImage` object with the following methods:
+
+```php
+$image = ResponsiveImages::make('uploads/products/image.jpg', width: 1200, height: 800);
+
+// Get all generated images as [width => url] array
+$image->getImages();
+// e.g. [320 => 'https://...', 640 => 'https://...', 1200 => 'https://...']
+
+// Get the URL of the closest generated image to the given width
+// Prefers equal or larger sizes; falls back to largest available if all are smaller
+$image->getImage(500);
+// returns URL of the nearest generated size (e.g. 640px version)
+
+// Get srcset string
+$image->getSrcset();
+// e.g. "https://.../image-320-abc.webp 320w, https://.../image-640-def.webp 640w, ..."
+
+// Render as HTML <picture> element
+$image->toHtml('Alt text');
+$image->toHtml('Alt text', 'eager');
+$image->toHtml('Alt text', 'lazy', ['class' => 'my-image']);
+```
+
+Available public properties:
+
+| Property | Type | Description |
+|---|---|---|
+| `$src` | `string` | URL of the largest generated image |
+| `$generatedImages` | `array` | All generated images as `[width => url]` |
+| `$sizes` | `string` | The `sizes` attribute value |
+| `$width` | `int` | Target width |
+| `$height` | `int` | Target height |
+| `$format` | `string` | Output format (e.g. `webp`) |
+
 ## Artisan Commands
 
 ### Clear Generated Images

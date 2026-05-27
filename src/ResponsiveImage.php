@@ -6,12 +6,45 @@ class ResponsiveImage
 {
     public function __construct(
         public string $src,
-        public string $srcset,
+        public array $generatedImages,
         public string $sizes,
         public int $width,
         public int $height,
         public string $format
     ) {}
+
+    public function getImages(): array
+    {
+        return $this->generatedImages;
+    }
+
+    public function getImage(int $width): string
+    {
+        $closest = null;
+
+        foreach ($this->generatedImages as $size => $url) {
+            if ($size >= $width) {
+                if ($closest === null || $closest < $width || $size < $closest) {
+                    $closest = $size;
+                }
+            } elseif ($closest === null || ($closest < $width && $size > $closest)) {
+                $closest = $size;
+            }
+        }
+
+        return $this->generatedImages[$closest];
+    }
+
+    public function getSrcset(): string
+    {
+        $parts = [];
+
+        foreach ($this->generatedImages as $w => $url) {
+            $parts[] = "{$url} {$w}w";
+        }
+
+        return implode(', ', $parts);
+    }
 
     public function toHtml(string $alt = '', string $loading = 'lazy', array $attributes = []): string
     {
@@ -31,7 +64,7 @@ class ResponsiveImage
 
         return view($viewName, [
             'format' => $this->format,
-            'srcset' => $this->srcset,
+            'srcset' => $this->getSrcset(),
             'sizes' => $this->sizes,
             'imgAttrsString' => $imgAttrsString,
         ])->render();

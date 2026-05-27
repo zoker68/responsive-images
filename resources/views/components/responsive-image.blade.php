@@ -1,7 +1,7 @@
 <picture>
     <source
         type="image/{{ $image->format }}"
-        srcset="{{ $image->srcset }}"
+        srcset="{{ $image->getSrcset() }}"
         sizes="{{ $image->sizes }}"
     >
     <img

@@ -16,11 +16,15 @@ class ResponsiveImagesService
     }
 
     public function make(
-        string $path,
+        ?string $path,
         ?int $width = null,
         ?int $height = null,
         ?string $disk = null
     ): ?ResponsiveImage {
+        if ($path === null) {
+            return null;
+        }
+
         $disk = $disk ?? config('responsive-images.disk');
 
         if (! Storage::disk($disk)->exists($path)) {
@@ -125,7 +129,7 @@ class ResponsiveImagesService
 
         return new ResponsiveImage(
             src: end($generatedImages),
-            srcset: $this->buildSrcset($generatedImages),
+            generatedImages: $generatedImages,
             sizes: '100vw',
             width: $width,
             height: $height,
@@ -155,17 +159,6 @@ class ResponsiveImagesService
         $filename = $pathInfo['filename'];
 
         return $directory . $filename;
-    }
-
-    protected function buildSrcset(array $images): string
-    {
-        $srcset = [];
-
-        foreach ($images as $width => $url) {
-            $srcset[] = "{$url} {$width}w";
-        }
-
-        return implode(', ', $srcset);
     }
 
     public function clear(?string $path = null): void

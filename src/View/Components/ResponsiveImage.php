@@ -10,7 +10,7 @@ class ResponsiveImage extends Component
     public ?\Zoker\ResponsiveImages\ResponsiveImage $image;
 
     public function __construct(
-        public string $path,
+        public ?string $path,
         public ?int $width = null,
         public ?int $height = null,
         public string $alt = '',
