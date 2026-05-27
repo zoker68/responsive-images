@@ -37,10 +37,30 @@ class ResponsiveImagesService
         [$staleSeconds, $expireSeconds] = config('responsive-images.cache_ttl', [300, 86400]);
         $cacheKey = $this->cacheKey($path, $width, $height, $disk);
 
-        return $this->cache()->flexible(
+        $data = $this->cache()->flexible(
             $cacheKey,
             [$staleSeconds, $expireSeconds],
-            fn () => $this->resolve($path, $width, $height, $disk)
+            function () use ($path, $width, $height, $disk) {
+                $image = $this->resolve($path, $width, $height, $disk);
+
+                return $image === null ? null : [
+                    'src' => $image->src,
+                    'generatedImages' => $image->generatedImages,
+                    'sizes' => $image->sizes,
+                    'width' => $image->width,
+                    'height' => $image->height,
+                    'format' => $image->format,
+                ];
+            }
+        );
+
+        return $data === null ? null : new ResponsiveImage(
+            src: $data['src'],
+            generatedImages: $data['generatedImages'],
+            sizes: $data['sizes'],
+            width: $data['width'],
+            height: $data['height'],
+            format: $data['format'],
         );
     }
 
