@@ -91,7 +91,7 @@ return [
     | (redis, memcached, database, file). Set to null to use the default store.
     |
     */
-    'cache_store' => env('RESPONSIVE_IMAGES_CACHE_STORE', env('CACHE_DRIVER', 'file')),
+    'cache_store' => env('RESPONSIVE_IMAGES_CACHE_STORE', env('CACHE_STORE', 'file')),
 
     /*
     |--------------------------------------------------------------------------
