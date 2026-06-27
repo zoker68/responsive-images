@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Zoker\ResponsiveImages\Tests\Unit;
 
 use Illuminate\Support\Facades\Storage;
+use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\ImageManager;
+use Zoker\ResponsiveImages\ResponsiveImage;
 use Zoker\ResponsiveImages\ResponsiveImagesService;
 use Zoker\ResponsiveImages\Tests\TestCase;
 
@@ -53,5 +56,29 @@ class ResponsiveImagesServiceTest extends TestCase
         $service->forgetCache('missing.jpg', 320, null, null);
 
         $this->assertTrue(true);
+    }
+
+    public function test_generate_returns_null_for_missing_input(): void
+    {
+        Storage::fake('public');
+
+        $this->assertNull($this->service()->generate(null));
+        $this->assertNull($this->service()->generate('missing.jpg'));
+    }
+
+    public function test_generate_produces_responsive_webp_images(): void
+    {
+        Storage::fake('public');
+        config(['responsive-images.disk' => 'public', 'responsive-images.output_disk' => 'public']);
+
+        $jpeg = (new ImageManager(new Driver))->create(400, 300)->toJpeg();
+        Storage::disk('public')->put('photo.jpg', (string) $jpeg);
+
+        $image = $this->service()->generate('photo.jpg', 320);
+
+        $this->assertInstanceOf(ResponsiveImage::class, $image);
+        $this->assertNotEmpty($image->getImages());
+        $this->assertSame('webp', $image->format);
+        $this->assertSame(320, $image->width);
     }
 }
