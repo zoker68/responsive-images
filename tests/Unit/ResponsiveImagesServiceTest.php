@@ -13,6 +13,7 @@ use Intervention\Image\Encoders\AvifEncoder;
 use Intervention\Image\Encoders\BmpEncoder;
 use Intervention\Image\Encoders\GifEncoder;
 use Intervention\Image\Encoders\JpegEncoder;
+use Intervention\Image\Encoders\PngEncoder;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Interfaces\EncoderInterface;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -100,6 +101,11 @@ class ResponsiveImagesServiceTest extends TestCase
     private function putJpeg(string $path): void
     {
         $this->putImage($path, new JpegEncoder);
+    }
+
+    private function putPng(string $path): void
+    {
+        $this->putImage($path, new PngEncoder);
     }
 
     private function putImage(string $path, EncoderInterface $encoder): void
@@ -291,6 +297,89 @@ class ResponsiveImagesServiceTest extends TestCase
         Exceptions::assertReportedCount(1);
         $this->assertSame(Storage::disk('public')->url('broken.tiff'), $image->src);
         Queue::assertPushed(GenerateResponsiveImages::class);
+    }
+
+    public function test_sync_queue_connection_generates_all_sizes_on_the_first_make(): void
+    {
+        Queue::fake();
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('a.png');
+
+        $image = $this->service()->make('a.png', 800, 400);
+
+        Queue::assertNothingPushed();
+        $this->assertSame([320, 480, 640, 768, 800], array_keys($image->generatedImages));
+        $this->assertTrue($image->hasSource());
+        $this->assertSame($image->generatedImages, $this->service()->make('a.png', 800, 400)->generatedImages);
+    }
+
+    public function test_queue_false_generates_in_the_request_on_an_async_connection(): void
+    {
+        Queue::fake();
+        config(['responsive-images.queue' => false]);
+        $this->fakeDisk();
+        $this->putPng('a.png');
+
+        $image = $this->service()->make('a.png', 800, 400);
+
+        Queue::assertNothingPushed();
+        $this->assertSame([320, 480, 640, 768, 800], array_keys($image->generatedImages));
+    }
+
+    public function test_async_queue_dispatches_the_job_and_returns_the_fallback(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putPng('a.png');
+
+        $image = $this->service()->make('a.png', 800, 400);
+
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+        $this->assertSame([], $image->generatedImages);
+
+        (new GenerateResponsiveImages('a.png', 800, 400))->handle($this->service());
+        $image = $this->service()->make('a.png', 800, 400);
+
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+        $this->assertSame([320, 480, 640, 768, 800], array_keys($image->generatedImages));
+    }
+
+    public function test_failed_in_request_generation_is_reported_and_serves_the_fallback(): void
+    {
+        Queue::fake();
+        Exceptions::fake();
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        Storage::disk('public')->put('broken.jpg', 'corrupt');
+
+        $image = $this->service()->make('broken.jpg', 320);
+
+        Exceptions::assertReportedCount(1);
+        Queue::assertNothingPushed();
+        $this->assertSame(Storage::disk('public')->url('broken.jpg'), $image->src);
+        $this->assertSame([], $image->generatedImages);
+    }
+
+    public function test_failed_in_request_generation_of_a_tiff_is_reported_once(): void
+    {
+        Exceptions::fake();
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        Storage::disk('public')->put('broken.tiff', 'corrupt');
+
+        $service = new class extends ResponsiveImagesService
+        {
+            protected function driverSupports(string $extension): bool
+            {
+                return true;
+            }
+        };
+
+        $image = $service->make('broken.tiff', 320);
+
+        Exceptions::assertReportedCount(1);
+        $this->assertSame(Storage::disk('public')->url('broken.tiff'), $image->src);
     }
 
     public function test_an_unknown_driver_is_rejected(): void

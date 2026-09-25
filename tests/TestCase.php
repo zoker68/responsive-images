@@ -22,5 +22,7 @@ class TestCase extends Orchestra
         $app['config']->set('responsive-images.cache_store', 'array');
         // The default depends on ext-imagick; pin it so results do not differ between host and Sail.
         $app['config']->set('responsive-images.driver', 'gd');
+        // phpunit.xml sets the sync connection, which makes make() generate in the request.
+        $app['config']->set('queue.default', 'database');
     }
 }

@@ -206,3 +206,12 @@ php artisan responsive-images:clear uploads/products/image.jpg
 5. Caches results using hash of (file modification time + dimensions + quality + format)
 6. Automatically invalidates cache when original file or parameters change
 7. Returns HTML with `<picture>` and `srcset`
+
+### Queue
+
+Missing sizes are built by the `GenerateResponsiveImages` job, and until it has run `make()` returns the fallback. Generation happens inside the `make()` call instead, and the first call already returns every size, when:
+
+- `queue` is `false` (`RESPONSIVE_IMAGES_QUEUE=false`), or
+- the default queue connection uses the `sync` driver.
+
+If that in-request generation fails, the error is reported and the fallback is returned, so the page still renders.

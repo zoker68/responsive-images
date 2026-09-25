@@ -108,7 +108,9 @@ return [
     |--------------------------------------------------------------------------
     |
     | Queue name for background image generation jobs. Set to null to use the
-    | default queue. Set to false to disable async generation entirely (sync).
+    | default queue. Set to false to generate missing images during the
+    | make() call instead of dispatching a job; the same happens when the
+    | default queue connection uses the sync driver.
     |
     */
     'queue' => env('RESPONSIVE_IMAGES_QUEUE', null),

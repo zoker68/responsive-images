@@ -19,10 +19,13 @@
 - **`driver` option: `gd` or `imagick`** (`RESPONSIVE_IMAGES_DRIVER`, enum `Enums\ImageDriver`). Imagick keeps GIF animation in the WebP output and reads TIFF and HEIC. `ext-imagick` is listed under `suggest`. Run `responsive-images:clear` after switching: file names do not depend on the driver.
 - **Displayable fallback for TIFF and HEIC.** Browsers cannot show these originals, so before the job has run `make()` converts the full-size WebP synchronously and returns it. A failed conversion is reported and falls back to the original URL.
 - **`ResponsiveImage::hasSource()`**: `true` when there are generated images in the output `format`. Both templates use it.
+- **In-request generation with a synchronous queue.** When `queue` is `false` or the default queue connection uses the `sync` driver, `make()` calls `generate()` directly instead of dispatching a job and returns (and caches) the full set of sizes on the first call. A failed generation is reported and the fallback is returned.
 - **Test suite** (PHPUnit + Orchestra Testbench), runnable from the package directory (`autoload-dev` added).
 
 ### Fixed
 
+- **`make()` no longer caches the fallback on a `sync` queue.** The job ran during the call, but `make()` returned and cached the fallback it had collected before, so pages showed the original until `cache_ttl[0]` expired.
+- **`queue => false` is honoured.** It was documented as disabling async generation, but the job was dispatched to the default queue.
 - **Generation works on `intervention/image` 4.** The code paths labelled v4/v3 actually targeted v3/v2, so `generate()` failed on v4 (`ImageManager::read()` does not exist there). Images are now decoded with `decodeBinary()` on v4 and `read()` on v3, and encoded with `encode(new WebpEncoder(...))` on both.
 - **No job on every cache refresh for SVG and other formats GD cannot read.** Previously `GenerateResponsiveImages` was dispatched and failed every time `flexible()` revalidated the entry.
 - **Correct `type` on `<source>`.** The fallback produced `type="image/svg"` and `type="image/jpg"`. There is no `<source>` for the original any more.

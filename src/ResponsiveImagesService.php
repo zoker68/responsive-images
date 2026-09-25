@@ -33,8 +33,8 @@ class ResponsiveImagesService
     }
 
     /**
-     * Build a ResponsiveImage from cached files. If anything is missing,
-     * dispatch a job to generate it and return a fallback (webp original or source).
+     * Build a ResponsiveImage from cached files. If anything is missing, generate it in the
+     * request (sync queue or queue => false) or dispatch a job and return a fallback.
      */
     public function make(
         ?string $path,
@@ -121,12 +121,23 @@ class ResponsiveImagesService
             }
         }
 
+        $generationFailed = false;
+
         if (! $allCached) {
-            $this->dispatchJob($path, $width, $height, $disk);
+            if ($this->generatesSynchronously()) {
+                try {
+                    return $this->generate($path, $width, $height, $disk);
+                } catch (Throwable $e) {
+                    report($e);
+                    $generationFailed = true;
+                }
+            } else {
+                $this->dispatchJob($path, $width, $height, $disk);
+            }
         }
 
         if (empty($generatedImages)) {
-            if (! in_array($this->extension($path), static::BROWSER_EXTENSIONS, true)) {
+            if (! $generationFailed && ! in_array($this->extension($path), static::BROWSER_EXTENSIONS, true)) {
                 $this->ensureDisplayableFallback($ctx);
             }
 
@@ -392,6 +403,17 @@ class ResponsiveImagesService
     protected function outputDisk(array $ctx): Filesystem
     {
         return Storage::disk($ctx['outputDisk']);
+    }
+
+    protected function generatesSynchronously(): bool
+    {
+        if (config('responsive-images.queue') === false) {
+            return true;
+        }
+
+        $connection = config('queue.default');
+
+        return config("queue.connections.{$connection}.driver") === 'sync';
     }
 
     protected function dispatchJob(string $path, ?int $width, ?int $height, ?string $disk): void
