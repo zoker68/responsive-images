@@ -4,6 +4,8 @@ namespace Zoker\ResponsiveImages;
 
 class ResponsiveImage
 {
+    public string $srcset;
+
     public function __construct(
         public string $src,
         public array $generatedImages,
@@ -11,7 +13,9 @@ class ResponsiveImage
         public int $width,
         public int $height,
         public string $format
-    ) {}
+    ) {
+        $this->srcset = $this->buildSrcset();
+    }
 
     public function getImages(): array
     {
@@ -41,6 +45,11 @@ class ResponsiveImage
 
     public function getSrcset(): string
     {
+        return $this->srcset;
+    }
+
+    protected function buildSrcset(): string
+    {
         $parts = [];
 
         foreach ($this->generatedImages as $w => $url) {
@@ -54,10 +63,10 @@ class ResponsiveImage
 
     public function hasSource(): bool
     {
-        return $this->format === config('responsive-images.format') && $this->getSrcset() !== '';
+        return $this->format === config('responsive-images.format') && $this->srcset !== '';
     }
 
-    public function toHtml(string $alt = '', string $loading = 'lazy', array $attributes = []): string
+    public function toHtml(string $alt = '', string $loading = 'lazy', array $attributes = [], ?string $sizes = null): string
     {
         $imgAttributes = array_merge([
             'src' => $this->src,
@@ -82,8 +91,8 @@ class ResponsiveImage
         return view($viewName, [
             'hasSource' => $this->hasSource(),
             'format' => $this->format,
-            'srcset' => $this->getSrcset(),
-            'sizes' => $this->sizes,
+            'srcset' => $this->srcset,
+            'sizes' => $sizes ?? $this->sizes,
             'imgAttrsString' => $imgAttrsString,
         ])->render();
     }

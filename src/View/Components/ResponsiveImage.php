@@ -15,7 +15,8 @@ class ResponsiveImage extends Component
         public ?int $height = null,
         public string $alt = '',
         public string $loading = 'lazy',
-        public ?string $disk = null
+        public ?string $disk = null,
+        public ?string $sizes = null
     ) {
         $service = app(ResponsiveImagesService::class);
         $this->image = $service->make($this->path, $this->width, $this->height, $this->disk);

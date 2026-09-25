@@ -117,6 +117,13 @@ echo $image->toHtml('Hero image', 'eager');
     loading="eager"
     disk="public"
 />
+{{-- Image in a one-third column: let the browser pick a size for 33vw, not 100vw --}}
+<x-responsive-image
+    path="uploads/products/image.jpg"
+    :width="800"
+    alt="Product image"
+    sizes="(min-width: 1024px) 33vw, 100vw"
+/>
 ```
 
 ### Blade Directive
@@ -139,6 +146,13 @@ echo $image->toHtml('Hero image', 'eager');
     alt: 'Hero image',
     loading: 'eager',
     disk: 'public'
+)
+{{-- Custom sizes attribute --}}
+@responsiveImage(
+    'uploads/products/image.jpg',
+    width: 800,
+    alt: 'Product image',
+    sizes: '(min-width: 1024px) 33vw, 100vw'
 )
 ```
 
@@ -170,6 +184,8 @@ $image->hasSource();
 $image->toHtml('Alt text');
 $image->toHtml('Alt text', 'eager');
 $image->toHtml('Alt text', 'lazy', ['class' => 'my-image']);
+// Override the sizes attribute (the image itself is not affected, so it is not part of the cache key)
+$image->toHtml('Alt text', 'lazy', [], '(min-width: 1024px) 33vw, 100vw');
 ```
 
 Available public properties:
@@ -178,7 +194,8 @@ Available public properties:
 |---|---|---|
 | `$src` | `string` | URL of the largest generated image (or the original / fallback) |
 | `$generatedImages` | `array` | All generated images as `[width => url]` |
-| `$sizes` | `string` | The `sizes` attribute value |
+| `$srcset` | `string` | The `srcset` attribute value (same as `getSrcset()`; handy where methods cannot be called, e.g. sandboxed Twig) |
+| `$sizes` | `string` | The default `sizes` attribute value (`100vw`) |
 | `$width` | `int` | Target width |
 | `$height` | `int` | Target height |
 | `$format` | `string` | Output format (e.g. `webp`), or the source extension for unsupported files / fallback |

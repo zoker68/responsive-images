@@ -99,4 +99,20 @@ class ResponsiveImageTest extends TestCase
         $this->assertTrue($this->makeImage()->hasSource());
         $this->assertStringContainsString('<source', $this->makeImage()->toHtml());
     }
+
+    public function test_srcset_property_matches_get_srcset(): void
+    {
+        $image = $this->makeImage();
+
+        $this->assertSame($image->getSrcset(), $image->srcset);
+        $this->assertStringContainsString('https://cdn.test/img-640.webp 640w', $image->srcset);
+    }
+
+    public function test_to_html_uses_the_image_sizes_by_default_and_the_given_sizes_when_passed(): void
+    {
+        $image = $this->makeImage();
+
+        $this->assertStringContainsString('sizes="100vw"', $image->toHtml());
+        $this->assertStringContainsString('sizes="(min-width: 1024px) 33vw, 100vw"', $image->toHtml('Alt', 'lazy', [], '(min-width: 1024px) 33vw, 100vw'));
+    }
 }

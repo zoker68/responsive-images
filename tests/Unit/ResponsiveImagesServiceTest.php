@@ -382,6 +382,34 @@ class ResponsiveImagesServiceTest extends TestCase
         $this->assertSame(Storage::disk('public')->url('broken.tiff'), $image->src);
     }
 
+    public function test_component_and_directive_accept_a_sizes_argument(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putJpeg('photo.jpg');
+        $this->service()->generate('photo.jpg', 320);
+
+        $component = Blade::render('<x-responsive-image path="photo.jpg" :width="320" alt="Photo" sizes="50vw" />');
+        $directive = Blade::render("@responsiveImage('photo.jpg', width: 320, alt: 'Photo', sizes: '50vw')");
+        $default = Blade::render("@responsiveImage('photo.jpg', width: 320, alt: 'Photo')");
+
+        $this->assertStringContainsString('sizes="50vw"', $component);
+        $this->assertStringContainsString('sizes="50vw"', $directive);
+        $this->assertStringContainsString('alt="Photo"', $directive);
+        $this->assertStringContainsString('sizes="100vw"', $default);
+    }
+
+    public function test_directive_accepts_positional_arguments_and_renders_nothing_for_a_missing_file(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putJpeg('photo.jpg');
+        $this->service()->generate('photo.jpg', 320);
+
+        $this->assertStringContainsString('<source', Blade::render("@responsiveImage('photo.jpg', 320)"));
+        $this->assertSame('', Blade::render("@responsiveImage('missing.jpg', 320)"));
+    }
+
     public function test_an_unknown_driver_is_rejected(): void
     {
         config(['responsive-images.driver' => 'vips']);

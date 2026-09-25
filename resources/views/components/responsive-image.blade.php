@@ -2,8 +2,8 @@
     @if ($image->hasSource())
         <source
             type="image/{{ $image->format }}"
-            srcset="{{ $image->getSrcset() }}"
-            sizes="{{ $image->sizes }}"
+            srcset="{{ $image->srcset }}"
+            sizes="{{ $sizes ?? $image->sizes }}"
         >
     @endif
     <img

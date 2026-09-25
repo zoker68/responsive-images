@@ -78,6 +78,21 @@ class ResponsiveImagesService
     }
 
     /**
+     * Render the <picture> markup, or an empty string when the source is missing. Backs the @responsiveImage directive.
+     */
+    public function render(
+        ?string $path,
+        ?int $width = null,
+        ?int $height = null,
+        ?string $disk = null,
+        string $alt = '',
+        string $loading = 'lazy',
+        ?string $sizes = null
+    ): string {
+        return $this->make($path, $width, $height, $disk)?->toHtml($alt, $loading, [], $sizes) ?? '';
+    }
+
+    /**
      * Forget the cached make() result for given parameters.
      */
     public function forgetCache(string $path, ?int $width, ?int $height, ?string $disk): void
