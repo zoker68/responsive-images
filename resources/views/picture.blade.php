@@ -1,9 +1,10 @@
 <picture>
-    <source
-        type="image/{{ $format }}"
-        srcset="{{ $srcset }}"
-        sizes="{{ $sizes }}"
-    >
+    @if ($hasSource)
+        <source
+            type="image/{{ $format }}"
+            srcset="{{ $srcset }}"
+            sizes="{{ $sizes }}"
+        >
+    @endif
     <img {!! $imgAttrsString !!}>
 </picture>
-

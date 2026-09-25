@@ -73,6 +73,37 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Driver
+    |--------------------------------------------------------------------------
+    |
+    | Image library: 'imagick' (requires ext-imagick) or 'gd'. Defaults to
+    | imagick when the extension is loaded. Imagick keeps GIF animation,
+    | reads TIFF/HEIC and is faster on photos, but uses more memory, which
+    | memory_limit does not cap. Run responsive-images:clear after switching:
+    | generated file names do not depend on the driver.
+    |
+    */
+    'driver' => env('RESPONSIVE_IMAGES_DRIVER', extension_loaded('imagick') ? 'imagick' : 'gd'),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Supported Extensions
+    |--------------------------------------------------------------------------
+    |
+    | Source file extensions that are converted (case-insensitive). Any other
+    | file (svg, ...), or one the server's GD build cannot read, is served
+    | as-is from the source disk: no job is dispatched and a plain <img> is
+    | rendered. With the gd driver animated GIFs become a static WebP (first
+    | frame), and tif/tiff/heic/heif need the imagick driver.
+    |
+    | Never add vector or document formats (svg, pdf, ps, eps): ImageMagick
+    | hands them to external delegates.
+    |
+    */
+    'extensions' => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'tif', 'tiff', 'heic', 'heif'],
+
+    /*
+    |--------------------------------------------------------------------------
     | Queue
     |--------------------------------------------------------------------------
     |

@@ -6,17 +6,30 @@ use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
-use Intervention\Image\Drivers\Gd\Driver;
+use Intervention\Image\Encoders\WebpEncoder;
 use Intervention\Image\ImageManager;
+use Throwable;
+use Zoker\ResponsiveImages\Enums\ImageDriver;
 use Zoker\ResponsiveImages\Jobs\GenerateResponsiveImages;
 
 class ResponsiveImagesService
 {
+    /**
+     * Extensions browsers can display, so the untouched original is a usable fallback.
+     */
+    protected const BROWSER_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp'];
+
+    protected ImageDriver $driver;
+
     protected ImageManager $manager;
+
+    /** @var array<int, string>|null */
+    protected ?array $imagickFormats = null;
 
     public function __construct()
     {
-        $this->manager = new ImageManager(new Driver);
+        $this->driver = ImageDriver::from(config('responsive-images.driver', ImageDriver::Gd->value));
+        $this->manager = new ImageManager($this->driver->instance());
     }
 
     /**
@@ -79,6 +92,17 @@ class ResponsiveImagesService
             return null;
         }
 
+        if (! $this->isSupported($path)) {
+            return new ResponsiveImage(
+                src: Storage::disk($disk)->url($path),
+                generatedImages: [],
+                sizes: '100vw',
+                width: $width ?? 0,
+                height: $height ?? 0,
+                format: $this->extension($path)
+            );
+        }
+
         $ctx = $this->buildContext($path, $disk);
         $sizes = $width !== null
             ? $this->calculateSizes($width)
@@ -102,11 +126,15 @@ class ResponsiveImagesService
         }
 
         if (empty($generatedImages)) {
+            if (! in_array($this->extension($path), static::BROWSER_EXTENSIONS, true)) {
+                $this->ensureDisplayableFallback($ctx);
+            }
+
             $fallback = $this->getFallback($ctx);
 
             return new ResponsiveImage(
                 src: $fallback['url'],
-                generatedImages: [($width ?? 0) => $fallback['url']],
+                generatedImages: [],
                 sizes: '100vw',
                 width: $width ?? 0,
                 height: $height ?? 0,
@@ -151,7 +179,7 @@ class ResponsiveImagesService
 
         $disk = $disk ?? config('responsive-images.disk');
 
-        if (! Storage::disk($disk)->exists($path)) {
+        if (! Storage::disk($disk)->exists($path) || ! $this->isSupported($path)) {
             return null;
         }
 
@@ -255,6 +283,18 @@ class ResponsiveImagesService
     }
 
     /**
+     * Convert the original synchronously so that a browser has something to show before the job runs.
+     */
+    protected function ensureDisplayableFallback(array $ctx): void
+    {
+        try {
+            $this->ensureOriginalWebp($ctx, $this->readOriginal($ctx['disk'], $ctx['path']));
+        } catch (Throwable $e) {
+            report($e);
+        }
+    }
+
+    /**
      * Ensure webp version of the original image exists in cache.
      */
     protected function ensureOriginalWebp(array $ctx, $original): void
@@ -307,14 +347,16 @@ class ResponsiveImagesService
 
     protected function readOriginal(string $disk, string $path)
     {
-        // v4 uses read(), v3 uses make()
+        $binary = Storage::disk($disk)->get($path);
+
+        // v4 uses decodeBinary(), v3 uses read()
         // @phpstan-ignore-next-line (supports both v3 and v4)
-        if (method_exists($this->manager, 'read')) {
-            return $this->manager->read(Storage::disk($disk)->get($path));
+        if (method_exists($this->manager, 'decodeBinary')) {
+            return $this->manager->decodeBinary($binary);
         }
 
-        // @phpstan-ignore-next-line (make() exists in v3)
-        return $this->manager->make(Storage::disk($disk)->path($path));
+        // @phpstan-ignore-next-line (read() exists in v3)
+        return $this->manager->read($binary);
     }
 
     protected function resize($image, int $width, ?int $height)
@@ -325,6 +367,7 @@ class ResponsiveImagesService
             if ($height !== null) {
                 $image->cover($width, $height);
             } else {
+                // @phpstan-ignore-next-line (supports both v3 and v4)
                 $image->scale(width: $width);
             }
         } else {
@@ -343,10 +386,7 @@ class ResponsiveImagesService
 
     protected function encodeWebp($image, int $quality)
     {
-        // @phpstan-ignore-next-line (supports both v3 and v4)
-        return method_exists($image, 'toWebp')
-            ? $image->toWebp($quality)
-            : $image->encode('webp', $quality); // @phpstan-ignore-line
+        return $image->encode(new WebpEncoder(quality: $quality));
     }
 
     protected function outputDisk(array $ctx): Filesystem
@@ -379,6 +419,54 @@ class ResponsiveImagesService
         sort($sizes);
 
         return $sizes;
+    }
+
+    protected function isSupported(string $path): bool
+    {
+        $extension = $this->extension($path);
+        $extensions = array_map('strtolower', config('responsive-images.extensions', []));
+
+        return in_array($extension, $extensions, true) && $this->driverSupports($extension);
+    }
+
+    /**
+     * Library builds differ (e.g. AVIF needs libavif, HEIC needs libheif), so a configured extension may still be unreadable.
+     */
+    protected function driverSupports(string $extension): bool
+    {
+        return match ($this->driver) {
+            ImageDriver::Gd => $this->gdSupports($extension),
+            ImageDriver::Imagick => $this->imagickSupports($extension),
+        };
+    }
+
+    protected function imagickSupports(string $extension): bool
+    {
+        $this->imagickFormats ??= \Imagick::queryFormats();
+        // ImageMagick lists TIFF but not the tif alias
+        $format = $extension === 'tif' ? 'TIFF' : strtoupper($extension);
+
+        return in_array($format, $this->imagickFormats, true);
+    }
+
+    protected function gdSupports(string $extension): bool
+    {
+        $type = match ($extension) {
+            'jpg', 'jpeg' => IMG_JPEG,
+            'png' => IMG_PNG,
+            'gif' => IMG_GIF,
+            'webp' => IMG_WEBP,
+            'avif' => IMG_AVIF,
+            'bmp' => IMG_BMP,
+            default => 0,
+        };
+
+        return (imagetypes() & $type) !== 0;
+    }
+
+    protected function extension(string $path): string
+    {
+        return strtolower(pathinfo($path, PATHINFO_EXTENSION));
     }
 
     protected function getImageDirectory(string $path): string

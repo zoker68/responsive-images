@@ -16,6 +16,51 @@ Publish the configuration file:
 php artisan vendor:publish --tag="responsive-images-config"
 ```
 
+### Driver
+
+```php
+// config/responsive-images.php
+'driver' => env('RESPONSIVE_IMAGES_DRIVER', extension_loaded('imagick') ? 'imagick' : 'gd'),
+```
+
+Imagick is the default when `ext-imagick` is loaded; otherwise the package falls back to GD, so a server without the extension keeps working. Set `RESPONSIVE_IMAGES_DRIVER` to pin one.
+
+| | `imagick` (default) | `gd` (fallback) |
+|---|---|---|
+| PHP extension | `ext-imagick` | `ext-gd` |
+| Reads | jpg/jpeg, png, webp, gif, avif, bmp, tif/tiff, heic/heif and whatever the ImageMagick build supports | jpg/jpeg, png, webp, gif, avif, bmp |
+| Animated GIF | animated WebP (every frame is resized for every breakpoint, so slower and heavier) | static WebP (first frame only) |
+| Photos | faster (≈1.7× on a 4000×3000 JPEG) | slower |
+| Memory | ≈1.8× more, allocated outside PHP: `memory_limit` does not cap it, size queue workers accordingly | less, counted in `memory_limit` |
+
+Run `php artisan responsive-images:clear` after switching the driver: generated file names do not depend on it, so the old files would keep being served.
+
+### Supported Formats
+
+Only files whose extension is listed in `extensions` are converted (comparison is case-insensitive, so `PHOTO.JPG` counts as `jpg`):
+
+```php
+// config/responsive-images.php
+'extensions' => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'tif', 'tiff', 'heic', 'heif'],
+```
+
+A listed extension is converted only if the driver on this server can read it: GD is checked with `imagetypes()` (AVIF needs GD built with libavif), Imagick with `Imagick::queryFormats()` (HEIC needs ImageMagick built with libheif). With `gd`, tif/tiff/heic/heif are therefore served as-is.
+
+> **Never add vector or document formats** (`svg`, `pdf`, `ps`, `eps`) when using Imagick: ImageMagick hands them to external delegates, which is a known attack surface. SVG is best served as-is anyway.
+
+> **Animated GIF** with the `gd` driver becomes a static WebP. Use `imagick`, or remove `gif` from `extensions`.
+
+**Formats browsers cannot display** (tif/tiff, heic/heif). Before the job has run, the untouched original would be useless as a fallback, so the first `make()` converts the full-size WebP synchronously (one conversion; the breakpoint sizes are still built by the job). If that conversion fails, the error is reported and the original URL is returned.
+
+Any other file (`svg`, ...) is served as-is:
+
+- no `GenerateResponsiveImages` job is dispatched and nothing is written to the output disk;
+- `make()` returns a `ResponsiveImage` with `src` = URL of the original on the source disk, empty `generatedImages`, and `format` = the file extension;
+- `generate()` returns `null`;
+- the rendered `<picture>` contains only the `<img>`, without `<source>`.
+
+A `<source type="image/webp">` is rendered only once generated images in the output `format` exist. Until the job has finished, the original (or its WebP copy) is rendered as a plain `<img>`.
+
 ## Usage
 
 ### Facade
@@ -109,13 +154,17 @@ $image->getImages();
 // e.g. [320 => 'https://...', 640 => 'https://...', 1200 => 'https://...']
 
 // Get the URL of the closest generated image to the given width
-// Prefers equal or larger sizes; falls back to largest available if all are smaller
+// Prefers equal or larger sizes; falls back to largest available if all are smaller.
+// Returns $src when nothing has been generated (e.g. SVG or before the job has run)
 $image->getImage(500);
 // returns URL of the nearest generated size (e.g. 640px version)
 
 // Get srcset string
 $image->getSrcset();
 // e.g. "https://.../image-320-abc.webp 320w, https://.../image-640-def.webp 640w, ..."
+
+// Whether a <source> is rendered (generated images in the output format exist)
+$image->hasSource();
 
 // Render as HTML <picture> element
 $image->toHtml('Alt text');
@@ -127,12 +176,12 @@ Available public properties:
 
 | Property | Type | Description |
 |---|---|---|
-| `$src` | `string` | URL of the largest generated image |
+| `$src` | `string` | URL of the largest generated image (or the original / fallback) |
 | `$generatedImages` | `array` | All generated images as `[width => url]` |
 | `$sizes` | `string` | The `sizes` attribute value |
 | `$width` | `int` | Target width |
 | `$height` | `int` | Target height |
-| `$format` | `string` | Output format (e.g. `webp`) |
+| `$format` | `string` | Output format (e.g. `webp`), or the source extension for unsupported files / fallback |
 
 ## Artisan Commands
 

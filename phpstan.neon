@@ -10,3 +10,6 @@ parameters:
 
     level: 5
 
+    # Intervention v3/v4 branches: an ignore needed on one version is unmatched on the other.
+    reportUnmatchedIgnoredErrors: false
+

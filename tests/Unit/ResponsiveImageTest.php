@@ -74,4 +74,29 @@ class ResponsiveImageTest extends TestCase
         $this->assertStringNotContainsString('width=', $html);
         $this->assertStringNotContainsString('height=', $html);
     }
+
+    public function test_get_image_returns_src_when_nothing_is_generated(): void
+    {
+        $image = new ResponsiveImage('https://cdn.test/logo.svg', [], '100vw', 0, 0, 'svg');
+
+        $this->assertSame('https://cdn.test/logo.svg', $image->getImage(500));
+    }
+
+    public function test_get_srcset_skips_non_positive_widths(): void
+    {
+        $image = new ResponsiveImage('s.webp', [0 => 's.webp'], '100vw', 0, 0, 'webp');
+
+        $this->assertSame('', $image->getSrcset());
+        $this->assertFalse($image->hasSource());
+        $this->assertStringNotContainsString('<source', $image->toHtml());
+    }
+
+    public function test_has_source_requires_the_output_format(): void
+    {
+        $image = new ResponsiveImage('a.jpg', [320 => 'a.jpg'], '100vw', 320, 0, 'jpg');
+
+        $this->assertFalse($image->hasSource());
+        $this->assertTrue($this->makeImage()->hasSource());
+        $this->assertStringContainsString('<source', $this->makeImage()->toHtml());
+    }
 }

@@ -20,5 +20,7 @@ class TestCase extends Orchestra
     {
         // Use the array cache store so the flexible() cache used by make() works in tests.
         $app['config']->set('responsive-images.cache_store', 'array');
+        // The default depends on ext-imagick; pin it so results do not differ between host and Sail.
+        $app['config']->set('responsive-images.driver', 'gd');
     }
 }

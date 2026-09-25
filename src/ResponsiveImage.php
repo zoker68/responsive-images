@@ -20,6 +20,10 @@ class ResponsiveImage
 
     public function getImage(int $width): string
     {
+        if ($this->generatedImages === []) {
+            return $this->src;
+        }
+
         $closest = null;
 
         foreach ($this->generatedImages as $size => $url) {
@@ -40,10 +44,17 @@ class ResponsiveImage
         $parts = [];
 
         foreach ($this->generatedImages as $w => $url) {
-            $parts[] = "{$url} {$w}w";
+            if ($w > 0) {
+                $parts[] = "{$url} {$w}w";
+            }
         }
 
         return implode(', ', $parts);
+    }
+
+    public function hasSource(): bool
+    {
+        return $this->format === config('responsive-images.format') && $this->getSrcset() !== '';
     }
 
     public function toHtml(string $alt = '', string $loading = 'lazy', array $attributes = []): string
@@ -69,6 +80,7 @@ class ResponsiveImage
         $viewName = 'responsive-images::picture';
 
         return view($viewName, [
+            'hasSource' => $this->hasSource(),
             'format' => $this->format,
             'srcset' => $this->getSrcset(),
             'sizes' => $this->sizes,

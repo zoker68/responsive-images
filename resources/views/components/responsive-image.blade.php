@@ -1,9 +1,11 @@
 <picture>
-    <source
-        type="image/{{ $image->format }}"
-        srcset="{{ $image->getSrcset() }}"
-        sizes="{{ $image->sizes }}"
-    >
+    @if ($image->hasSource())
+        <source
+            type="image/{{ $image->format }}"
+            srcset="{{ $image->getSrcset() }}"
+            sizes="{{ $image->sizes }}"
+        >
+    @endif
     <img
         src="{{ $image->src }}"
         @if ($image->width > 0) width="{{ $image->width }}" @endif
