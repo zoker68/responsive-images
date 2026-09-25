@@ -42,12 +42,14 @@ class ResponsiveImagesService
         ?int $height = null,
         ?string $disk = null
     ): ?ResponsiveImage {
+        $path = $this->normalizePath($path);
+
         if ($path === null) {
             return null;
         }
 
         $disk = $disk ?? config('responsive-images.disk');
-        [$staleSeconds, $expireSeconds] = config('responsive-images.cache_ttl', [300, 86400]);
+        [$staleSeconds, $expireSeconds] = config('responsive-images.cache_ttl', [86400, 604800]);
         $cacheKey = $this->cacheKey($path, $width, $height, $disk);
 
         $data = $this->cache()->flexible(
@@ -97,8 +99,28 @@ class ResponsiveImagesService
      */
     public function forgetCache(string $path, ?int $width, ?int $height, ?string $disk): void
     {
+        $path = $this->normalizePath($path);
+
+        if ($path === null) {
+            return;
+        }
+
         $disk = $disk ?? config('responsive-images.disk');
         $this->cache()->forget($this->cacheKey($path, $width, $height, $disk));
+    }
+
+    /**
+     * A leading slash would double the separator in output paths and split the cache/job identity of one file.
+     */
+    protected function normalizePath(?string $path): ?string
+    {
+        if ($path === null) {
+            return null;
+        }
+
+        $path = ltrim($path, '/');
+
+        return $path === '' ? null : $path;
     }
 
     protected function resolve(string $path, ?int $width, ?int $height, string $disk): ?ResponsiveImage
@@ -119,15 +141,21 @@ class ResponsiveImagesService
         }
 
         $ctx = $this->buildContext($path, $disk);
-        $sizes = $width !== null
-            ? $this->calculateSizes($width)
-            : config('responsive-images.breakpoints', []);
+        $target = $this->resolveTargetDimensions($disk, $path, $width, $height);
+
+        if ($target !== null) {
+            $sizes = $this->calculateSizes($target['width']);
+        } else {
+            $sizes = $width !== null
+                ? $this->calculateSizes($width)
+                : config('responsive-images.breakpoints', []);
+        }
 
         $generatedImages = [];
         $allCached = true;
 
         foreach ($sizes as $size) {
-            $url = $this->getCachedSizeUrl($ctx, $size, $width, $height);
+            $url = $this->getCachedSizeUrl($ctx, $size, $target, $height !== null);
 
             if ($url !== null) {
                 $generatedImages[$size] = $url;
@@ -162,8 +190,8 @@ class ResponsiveImagesService
                 src: $fallback['url'],
                 generatedImages: [],
                 sizes: '100vw',
-                width: $width ?? 0,
-                height: $height ?? 0,
+                width: $target['width'] ?? $width ?? 0,
+                height: $target['height'] ?? $height ?? 0,
                 format: $fallback['format']
             );
         }
@@ -172,10 +200,88 @@ class ResponsiveImagesService
             src: end($generatedImages),
             generatedImages: $generatedImages,
             sizes: '100vw',
-            width: $width ?? 0,
-            height: $height ?? 0,
+            width: $target['width'] ?? $width ?? 0,
+            height: $target['height'] ?? $height ?? 0,
             format: $ctx['format']
         );
+    }
+
+    /**
+     * Target dimensions as generate() will compute them. Reads only the header of the original, and only when needed.
+     *
+     * @return array{width:int,height:int}|null
+     */
+    protected function resolveTargetDimensions(string $disk, string $path, ?int $width, ?int $height): ?array
+    {
+        if ($width !== null && $height !== null) {
+            return ['width' => $width, 'height' => $height];
+        }
+
+        $original = $this->readDimensions($disk, $path);
+
+        return $original === null ? null : $this->targetDimensions($width, $height, $original[0], $original[1]);
+    }
+
+    /**
+     * @return array{width:int,height:int}
+     */
+    protected function targetDimensions(?int $width, ?int $height, int $originalWidth, int $originalHeight): array
+    {
+        $width = $width ?? $originalWidth;
+        $height = $height ?? (int) round($width * ($originalHeight / $originalWidth));
+
+        return ['width' => $width, 'height' => $height];
+    }
+
+    /**
+     * Width and height of the original without decoding it. Null when the format or the file cannot be read.
+     *
+     * @return array{0:int,1:int}|null
+     */
+    protected function readDimensions(string $disk, string $path): ?array
+    {
+        try {
+            $storage = Storage::disk($disk);
+            $local = config("filesystems.disks.{$disk}.driver") === 'local';
+            $source = $local ? $storage->path($path) : (string) $storage->get($path);
+            $info = $local ? getimagesize($source) : getimagesizefromstring($source);
+
+            if ($info === false || $info[0] < 1 || $info[1] < 1) {
+                return null;
+            }
+
+            [$width, $height] = $info;
+
+            if ($this->isRotatedByExif($info[2], $source, $local)) {
+                [$width, $height] = [$height, $width];
+            }
+
+            return [$width, $height];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Intervention auto-orients on decode, so generate() sees swapped dimensions for EXIF orientations 5-8.
+     */
+    protected function isRotatedByExif(int $imageType, string $source, bool $isPath): bool
+    {
+        if (! in_array($imageType, [IMAGETYPE_JPEG, IMAGETYPE_TIFF_II, IMAGETYPE_TIFF_MM], true) || ! function_exists('exif_read_data')) {
+            return false;
+        }
+
+        if ($isPath) {
+            $exif = @exif_read_data($source);
+        } else {
+            $stream = fopen('php://temp', 'r+');
+            fwrite($stream, $source);
+            rewind($stream);
+            $exif = @exif_read_data($stream);
+            fclose($stream);
+        }
+
+        return is_array($exif) && in_array((int) ($exif['Orientation'] ?? 1), [5, 6, 7, 8], true);
     }
 
     protected function cache(): Repository
@@ -199,6 +305,8 @@ class ResponsiveImagesService
         ?int $height = null,
         ?string $disk = null
     ): ?ResponsiveImage {
+        $path = $this->normalizePath($path);
+
         if ($path === null) {
             return null;
         }
@@ -213,8 +321,9 @@ class ResponsiveImagesService
         $original = $this->readOriginal($disk, $path);
 
         $explicitHeight = $height;
-        $width = $width ?? $original->width();
-        $height = $height ?? (int) round($width * ($original->height() / $original->width()));
+        ['width' => $width, 'height' => $height] = $this->targetDimensions(
+            $width, $height, $original->width(), $original->height()
+        );
 
         $this->ensureOriginalWebp($ctx, $original);
 
@@ -240,9 +349,10 @@ class ResponsiveImagesService
 
     public function clear(?string $path = null): void
     {
+        $path = $this->normalizePath($path);
         $outputDisk = config('responsive-images.output_disk');
         $outputPath = config('responsive-images.output_path');
-        $target = $path ? "{$outputPath}/{$this->getImageDirectory($path)}" : $outputPath;
+        $target = $path !== null ? "{$outputPath}/{$this->getImageDirectory($path)}" : $outputPath;
 
         if (Storage::disk($outputDisk)->exists($target)) {
             Storage::disk($outputDisk)->deleteDirectory($target);
@@ -274,12 +384,15 @@ class ResponsiveImagesService
     }
 
     /**
-     * Return URL of cached resized file or null if it doesn't exist.
+     * Return URL of cached resized file or null if it doesn't exist. The file name carries a height only when
+     * the caller passed one, exactly as generate() writes it.
+     *
+     * @param  array{width:int,height:int}|null  $target
      */
-    protected function getCachedSizeUrl(array $ctx, int $size, ?int $width, ?int $height): ?string
+    protected function getCachedSizeUrl(array $ctx, int $size, ?array $target, bool $explicitHeight): ?string
     {
-        $resizedHeight = ($width !== null && $height !== null)
-            ? (int) round($size * ($height / $width))
+        $resizedHeight = ($explicitHeight && $target !== null)
+            ? (int) round($size * ($target['height'] / $target['width']))
             : null;
 
         $filePath = $this->buildSizePath($ctx, $size, $resizedHeight);

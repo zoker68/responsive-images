@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.3 — 2026-09-25
+
+### Upgrading
+
+- **`clear('/')` (and `responsive-images:clear /`) now clears everything.** The path is normalised first; before, it targeted a non-existent directory and did nothing.
+- No manual clear is needed: `make()` results cached by 1.3.x keep their `height: 0` only until `flexible()` refreshes them after `cache_ttl[0]`.
+- **Default `cache_ttl` is now `[86400, 604800]`** (1 day fresh, 7 days stale), was `[600, 86400]`. A published config keeps its own value. The result only changes with the original file or the config, so the old 10-minute refresh just repeated the same disk lookups (and HTTP requests on S3). Run `responsive-images:clear` after replacing a file under the same name, or lower the TTL in your config.
+
+### Fixed
+
+- **`width`/`height` of a `make()` result no longer depend on where it was built.** Once the files existed, a cache refresh rebuilt the result with `height: 0` (`make('a.png', 800)` went from `800×600` to `800×0`), so the `<img>` lost its `height` and the layout jumped. `make()` now computes the target size the way `generate()` does: `width` only → proportional height, no `width` → original size, both → as passed. The original is read with `getimagesize()` (header only) and only when a dimension is missing; EXIF-rotated JPEG/TIFF originals are accounted for. If the header cannot be read, the previous behaviour applies.
+- **`make()` without a `width` is complete once generated.** It checked every configured breakpoint, while `generate()` builds only those up to the original width, so the set never looked complete: every cache refresh decoded the original again (sync) or dispatched another job (async). It now expects the same set as `generate()`.
+- **`make()` with a `height` but no `width` finds its files.** `generate()` named them with the height, the lookup did not, so they were regenerated on every refresh.
+- **A leading `/` in the path is stripped** in `make()`, `generate()`, `forgetCache()` and `clear()`. It doubled the separator in generated URLs and made `'/a.png'` and `'a.png'` separate cache entries and separate (non-deduplicated) jobs. `make('/')` and `make('')` return `null`.
+
 ## 1.3.2 — 2026-09-25
 
 ### Upgrading

@@ -134,7 +134,10 @@ return [
     | Stale-while-revalidate TTLs for make() result, in seconds.
     | [stale, expire]: up to "stale" — fresh; between "stale" and "expire" —
     | served stale and refreshed in background; after "expire" — full refresh.
+    | The result only changes when the original file or this config changes,
+    | so long TTLs are safe; run responsive-images:clear after replacing a
+    | file under the same name.
     |
     */
-    'cache_ttl' => [600, 86400],
+    'cache_ttl' => [86400, 604800],
 ];

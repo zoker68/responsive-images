@@ -98,23 +98,74 @@ class ResponsiveImagesServiceTest extends TestCase
         config(['responsive-images.disk' => 'public', 'responsive-images.output_disk' => 'public']);
     }
 
-    private function putJpeg(string $path): void
+    private function putJpeg(string $path, int $width = 400, int $height = 300): void
     {
-        $this->putImage($path, new JpegEncoder);
+        $this->putImage($path, new JpegEncoder, $width, $height);
     }
 
-    private function putPng(string $path): void
+    private function putPng(string $path, int $width = 400, int $height = 300): void
     {
-        $this->putImage($path, new PngEncoder);
+        $this->putImage($path, new PngEncoder, $width, $height);
     }
 
-    private function putImage(string $path, EncoderInterface $encoder): void
+    private function putImage(string $path, EncoderInterface $encoder, int $width = 400, int $height = 300): void
+    {
+        Storage::disk('public')->put($path, $this->encodeImage($encoder, $width, $height));
+    }
+
+    private function encodeImage(EncoderInterface $encoder, int $width, int $height): string
     {
         $manager = new ImageManager(new Driver);
         // v4 renamed create() to createImage()
-        $image = method_exists($manager, 'createImage') ? $manager->createImage(400, 300) : $manager->create(400, 300);
+        $image = method_exists($manager, 'createImage') ? $manager->createImage($width, $height) : $manager->create($width, $height);
 
-        Storage::disk('public')->put($path, (string) $image->encode($encoder));
+        return (string) $image->encode($encoder);
+    }
+
+    /**
+     * A 400x300 JPEG whose EXIF says "rotate 90°": an APP1 segment with one IFD0 tag (0x0112 Orientation = 6) spliced after SOI.
+     */
+    private function putExifRotatedJpeg(string $path): void
+    {
+        $jpeg = $this->encodeImage(new JpegEncoder, 400, 300);
+        $tiff = 'II' . pack('v', 42) . pack('V', 8)
+            . pack('v', 1) . pack('vvVV', 0x0112, 3, 1, 6) . pack('V', 0);
+        $payload = "Exif\0\0" . $tiff;
+        $app1 = "\xFF\xE1" . pack('n', strlen($payload) + 2) . $payload;
+
+        Storage::disk('public')->put($path, substr($jpeg, 0, 2) . $app1 . substr($jpeg, 2));
+    }
+
+    /**
+     * Service that counts generate() and resolve() calls, to prove a cache refresh does not regenerate.
+     */
+    private function countingService(): ResponsiveImagesService
+    {
+        return new class extends ResponsiveImagesService
+        {
+            public int $generateCalls = 0;
+
+            public int $resolveCalls = 0;
+
+            public function generate(?string $path, ?int $width = null, ?int $height = null, ?string $disk = null): ?ResponsiveImage
+            {
+                $this->generateCalls++;
+
+                return parent::generate($path, $width, $height, $disk);
+            }
+
+            protected function resolve(string $path, ?int $width, ?int $height, string $disk): ?ResponsiveImage
+            {
+                $this->resolveCalls++;
+
+                return parent::resolve($path, $width, $height, $disk);
+            }
+        };
+    }
+
+    private function dimensions(ResponsiveImage $image): array
+    {
+        return [$image->width, $image->height, array_keys($image->generatedImages)];
     }
 
     public function test_make_serves_an_unsupported_file_as_is_without_dispatching(): void
@@ -408,6 +459,222 @@ class ResponsiveImagesServiceTest extends TestCase
 
         $this->assertStringContainsString('<source', Blade::render("@responsiveImage('photo.jpg', 320)"));
         $this->assertSame('', Blade::render("@responsiveImage('missing.jpg', 320)"));
+    }
+
+    public function test_make_with_a_width_keeps_the_proportional_height_after_a_cache_refresh(): void
+    {
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('a.png');
+        $service = $this->countingService();
+
+        $first = $service->make('a.png', 800);
+        $this->assertSame([800, 600, [320, 480, 640, 768, 800]], $this->dimensions($first));
+        $this->assertSame(1, $service->generateCalls);
+
+        $service->forgetCache('a.png', 800, null, null);
+        $second = $service->make('a.png', 800);
+
+        $this->assertSame(1, $service->generateCalls);
+        $this->assertSame($this->dimensions($first), $this->dimensions($second));
+        $this->assertSame($first->generatedImages, $second->generatedImages);
+        $this->assertStringContainsString('height="600"', $second->toHtml());
+    }
+
+    public function test_make_without_a_width_uses_the_original_dimensions_and_is_complete_after_generation(): void
+    {
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('a.png', 700, 350);
+        $service = $this->countingService();
+
+        $first = $service->make('a.png');
+        $this->assertSame([700, 350, [320, 480, 640, 700]], $this->dimensions($first));
+
+        $service->forgetCache('a.png', null, null, null);
+        $second = $service->make('a.png');
+
+        $this->assertSame(1, $service->generateCalls);
+        $this->assertSame(2, $service->resolveCalls);
+        $this->assertSame($first->generatedImages, $second->generatedImages);
+        $this->assertSame([700, 350, [320, 480, 640, 700]], $this->dimensions($second));
+    }
+
+    public function test_make_with_a_height_only_finds_the_files_generate_wrote(): void
+    {
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('a.png', 700, 350);
+        $service = $this->countingService();
+
+        $first = $service->make('a.png', null, 200);
+        $this->assertSame([700, 200, [320, 480, 640, 700]], $this->dimensions($first));
+
+        $service->forgetCache('a.png', null, 200, null);
+        $second = $service->make('a.png', null, 200);
+
+        $this->assertSame(1, $service->generateCalls);
+        $this->assertSame($first->generatedImages, $second->generatedImages);
+    }
+
+    public function test_async_make_without_a_width_stops_dispatching_once_the_job_has_run(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putPng('a.png', 700, 350);
+
+        $fallback = $this->service()->make('a.png');
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+        $this->assertSame([700, 350, []], $this->dimensions($fallback));
+
+        (new GenerateResponsiveImages('a.png'))->handle($this->service());
+        $image = $this->service()->make('a.png');
+
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+        $this->assertSame([700, 350, [320, 480, 640, 700]], $this->dimensions($image));
+    }
+
+    public static function dimensionArguments(): array
+    {
+        return [
+            'width only' => [800, null],
+            'height only' => [null, 200],
+            'both' => [800, 400],
+            'none' => [null, null],
+        ];
+    }
+
+    #[DataProvider('dimensionArguments')]
+    public function test_a_cache_refresh_reports_the_same_dimensions_as_generate(?int $width, ?int $height): void
+    {
+        $this->fakeDisk();
+        $this->putJpeg('photo.jpg', 700, 350);
+
+        $generated = $this->service()->generate('photo.jpg', $width, $height);
+        $resolved = $this->service()->make('photo.jpg', $width, $height);
+
+        $this->assertSame($this->dimensions($generated), $this->dimensions($resolved));
+        $this->assertSame($generated->generatedImages, $resolved->generatedImages);
+    }
+
+    public function test_exif_rotated_jpeg_reports_the_same_dimensions_as_generate(): void
+    {
+        if (! function_exists('exif_read_data')) {
+            $this->markTestSkipped('ext-exif is not loaded');
+        }
+
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putExifRotatedJpeg('rotated.jpg');
+
+        $generated = $this->service()->generate('rotated.jpg');
+        $this->assertSame([300, 400], [$generated->width, $generated->height]);
+
+        $resolved = $this->service()->make('rotated.jpg');
+        $this->assertSame($this->dimensions($generated), $this->dimensions($resolved));
+        Queue::assertNothingPushed();
+
+        $fallback = $this->service()->make('rotated.jpg', 600);
+        $this->assertSame([600, 800, []], $this->dimensions($fallback));
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+    }
+
+    public function test_dimensions_of_a_non_local_disk_are_read_from_the_file_contents(): void
+    {
+        if (! function_exists('exif_read_data')) {
+            $this->markTestSkipped('ext-exif is not loaded');
+        }
+
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putExifRotatedJpeg('rotated.jpg');
+        // Storage::fake() keeps the disk local; only the driver name decides which reader is used.
+        config(['filesystems.disks.public.driver' => 's3']);
+
+        $generated = $this->service()->generate('rotated.jpg');
+        $resolved = $this->service()->make('rotated.jpg');
+
+        $this->assertSame([300, 400, [300]], $this->dimensions($generated));
+        $this->assertSame($this->dimensions($generated), $this->dimensions($resolved));
+        Queue::assertNothingPushed();
+    }
+
+    public function test_unreadable_dimensions_fall_back_to_the_passed_values(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        Storage::disk('public')->put('broken.jpg', 'corrupt');
+
+        $withWidth = $this->service()->make('broken.jpg', 800);
+        $withoutWidth = $this->service()->make('broken.jpg');
+
+        Queue::assertPushed(GenerateResponsiveImages::class, 2);
+        $this->assertSame([800, 0, []], $this->dimensions($withWidth));
+        $this->assertSame([0, 0, []], $this->dimensions($withoutWidth));
+    }
+
+    public function test_leading_slash_is_stripped_from_the_path(): void
+    {
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('cases/a.png');
+
+        $image = $this->service()->make('/cases/a.png', 320);
+
+        $this->assertStringNotContainsString('//', substr($image->src, 1));
+        foreach ($image->generatedImages as $url) {
+            $this->assertStringNotContainsString('//', substr($url, 1));
+        }
+        $this->assertNotEmpty(Storage::disk('public')->allFiles('responsive-images/cases/a'));
+        $this->assertSame($image->generatedImages, $this->service()->make('cases/a.png', 320)->generatedImages);
+    }
+
+    public function test_paths_with_and_without_a_leading_slash_share_the_cache_and_the_job(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+        $this->putPng('a.png');
+        $service = $this->countingService();
+
+        $slashed = $service->make('/a.png', 320);
+        $plain = $service->make('a.png', 320);
+
+        $this->assertSame(1, $service->resolveCalls);
+        $this->assertSame($this->dimensions($slashed), $this->dimensions($plain));
+        Queue::assertPushed(GenerateResponsiveImages::class, 1);
+        Queue::assertPushed(GenerateResponsiveImages::class, fn (GenerateResponsiveImages $job) => $job->path === 'a.png'
+            && $job->uniqueId() === (new GenerateResponsiveImages('a.png', 320, null, 'public'))->uniqueId());
+    }
+
+    public function test_forget_cache_and_clear_accept_a_leading_slash(): void
+    {
+        config(['queue.default' => 'sync']);
+        $this->fakeDisk();
+        $this->putPng('a.png');
+        $service = $this->countingService();
+
+        $service->make('a.png', 320);
+        $service->forgetCache('/a.png', 320, null, null);
+        $service->make('a.png', 320);
+        $this->assertSame(2, $service->resolveCalls);
+
+        $this->assertNotEmpty(Storage::disk('public')->allFiles('responsive-images/a'));
+        $service->clear('/a.png');
+        $this->assertSame([], Storage::disk('public')->allFiles('responsive-images/a'));
+    }
+
+    public function test_root_and_empty_paths_return_null(): void
+    {
+        Queue::fake();
+        $this->fakeDisk();
+
+        $this->assertNull($this->service()->make('/'));
+        $this->assertNull($this->service()->make(''));
+        $this->assertNull($this->service()->generate('/'));
+        $this->assertNull($this->service()->generate(''));
+        $this->service()->forgetCache('/', null, null, null);
+
+        Queue::assertNothingPushed();
     }
 
     public function test_an_unknown_driver_is_rejected(): void

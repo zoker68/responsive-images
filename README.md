@@ -214,6 +214,27 @@ php artisan responsive-images:clear uploads/products/image.jpg
 
 > **Note:** Images are automatically regenerated when the original file changes or config parameters are updated. No manual regeneration needed!
 
+### Dimensions
+
+`width` and `height` of the result (and of the rendered `<img>`) are the same whether `make()` builds it from freshly generated files or from files already on the output disk:
+
+| Arguments | Target size | Generated widths |
+|---|---|---|
+| `width` and `height` | as passed, the original is not read | breakpoints ≤ `width`, plus `width` |
+| `width` only | `height` = `width` × original ratio | breakpoints ≤ `width`, plus `width` |
+| `height` only | `width` = original width, `height` as passed | breakpoints ≤ original width, plus it |
+| none | original width and height | breakpoints ≤ original width, plus it |
+
+When the original has to be consulted, only its header is read (`getimagesize()`, no decoding). A JPEG/TIFF with an EXIF orientation of 5–8 is auto-rotated on conversion, so its width and height are swapped here too. If the header cannot be read (e.g. HEIC, which `getimagesize()` does not understand, or a corrupt file), the result carries the passed values (`0` when omitted) and the missing sizes are requested on every cache refresh, as before.
+
+### Cache
+
+The result of `make()` is cached with `Cache::flexible()` in `cache_store`; `cache_ttl` is `[stale, expire]` in seconds, `[86400, 604800]` by default. A cache hit touches neither disk nor image. The entry is recomputed in the background after `stale`, and synchronously after `expire`. It only changes when the original file, `breakpoints`, `quality` or `format` change, so after replacing an image under the same name run `php artisan responsive-images:clear` (or lower the TTL).
+
+### Paths
+
+A leading `/` in the source path is ignored: `make('/uploads/a.jpg')` is the same image, cache entry and job as `make('uploads/a.jpg')`. `make('/')` and `make('')` return `null`, and `responsive-images:clear /` clears everything.
+
 ## How It Works
 
 1. Package accepts image path, optional target width and height (uses original dimensions if not specified), Alt attribute, optional disk (uses default disk if not specified)
